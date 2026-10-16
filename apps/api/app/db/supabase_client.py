@@ -17,9 +17,11 @@ class SupabaseDataClient:
 
     def __init__(self, user: AuthenticatedUser):
         self.user = user
-        self.base_url = f"{settings.SUPABASE_URL.rstrip('/')}/rest/v1"
+        clean_url = settings.SUPABASE_URL.strip().split()[0].rstrip("/")
+        clean_key = settings.SUPABASE_ANON_KEY.strip().split()[0]
+        self.base_url = f"{clean_url}/rest/v1"
         self.headers = {
-            "apikey": settings.SUPABASE_ANON_KEY,
+            "apikey": clean_key,
             "Authorization": f"Bearer {user.raw_token}",
             "Content-Type": "application/json",
             "Prefer": "return=representation",
@@ -36,9 +38,10 @@ class SupabaseDataClient:
         req_headers = {**self.headers, **(headers or {})}
         url = f"{self.base_url}/{path.lstrip('/')}"
 
-        # Test veya çevrimdışı geliştirme modunda yerel store'a yönlendirme kontrolü
+        # Test, çevrimdışı mod veya izole demo hesabı için yerel store'a yönlendirme
         from app.db.local_store import is_local_mode, local_db
-        if is_local_mode():
+        is_demo_account = self.user.email in ("ogrenci@benimpayim.dev", "demo@benimpayim.local")
+        if is_local_mode() or is_demo_account:
             return await local_db.handle_request(
                 user_id=self.user.user_id,
                 method=method,

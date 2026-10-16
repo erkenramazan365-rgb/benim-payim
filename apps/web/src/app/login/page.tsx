@@ -84,16 +84,18 @@ function LoginForm() {
           return;
         }
       } else {
-        // Yerel Demo Modu: Backend'den imzalı token al
+        // Yerel Demo Modu: Backend'den imzalı token al (2.5sn zaman aşımı ile)
+        const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().split(/\s+/)[0].replace(/\/$/, "");
         try {
-          const res = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/auth/demo-token`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email: email.trim() }),
-            }
-          );
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 2500);
+          const res = await fetch(`${rawApiUrl}/api/auth/demo-token`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email: email.trim() }),
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
           if (res.ok) {
             const data = await res.json();
             handleSuccessfulAuth(data.user_id, data.email, data.access_token);
@@ -117,15 +119,17 @@ function LoginForm() {
     const demoEmail = "ogrenci@benimpayim.dev";
     setLoading(true);
     setError(null);
+    const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().split(/\s+/)[0].replace(/\/$/, "");
     try {
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/auth/demo-token`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: demoEmail }),
-        }
-      );
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const res = await fetch(`${rawApiUrl}/api/auth/demo-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: demoEmail }),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
       if (res.ok) {
         const data = await res.json();
         handleSuccessfulAuth(data.user_id, data.email, data.access_token);

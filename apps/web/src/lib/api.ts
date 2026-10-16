@@ -1,9 +1,17 @@
-import { getStoredSession } from "./auth";
+import { getStoredSession, isDemoSession } from "./auth";
+import { handleFallbackRequest } from "./fallback";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const rawApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE_URL = rawApiBase.trim().split(/\s+/)[0].replace(/\/$/, "");
 
 async function fetchWithAuth(path: string, options: RequestInit = {}) {
   const session = getStoredSession();
+
+  // Demo oturumunda mock-signature varsa doğrudan izole istemci mağazasını kullan
+  if (session && isDemoSession(session) && session.token.includes("mock-signature")) {
+    return handleFallbackRequest(path, options);
+  }
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string>),
@@ -13,27 +21,47 @@ async function fetchWithAuth(path: string, options: RequestInit = {}) {
     headers["Authorization"] = `Bearer ${session.token}`;
   }
 
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
 
-  if (!res.ok) {
-    let errorDetail = "Bir işlem hatası oluştu.";
-    try {
-      const errJson = await res.json();
-      errorDetail = errJson.detail || errJson.message || errorDetail;
-    } catch {
-      errorDetail = await res.text();
+    if (!res.ok) {
+      if (res.status >= 500 || (res.status === 401 && isDemoSession(session))) {
+        return await handleFallbackRequest(path, options);
+      }
+      let errorDetail = "Bir işlem hatası oluştu.";
+      try {
+        const errJson = await res.json();
+        errorDetail = errJson.detail || errJson.message || errorDetail;
+      } catch {
+        errorDetail = await res.text();
+      }
+      throw new Error(errorDetail);
     }
-    throw new Error(errorDetail);
-  }
 
-  if (res.status === 204) {
-    return null;
-  }
+    if (res.status === 204) {
+      return null;
+    }
 
-  return res.json();
+    return await res.json();
+  } catch (err: any) {
+    // Render uyku modundaysa (timeout) veya ağ hatası varsa doğrudan Supabase / Demo yedek katmanıyla devam et
+    if (
+      err.name === "AbortError" ||
+      err.message?.includes("Failed to fetch") ||
+      err.message?.includes("NetworkError") ||
+      err.message?.includes("Load failed")
+    ) {
+      return await handleFallbackRequest(path, options);
+    }
+    throw err;
+  }
 }
 
 // ----------------- OTURUMLAR (SESSIONS) -----------------
