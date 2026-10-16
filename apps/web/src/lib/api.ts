@@ -1,14 +1,32 @@
 import { getStoredSession, isDemoSession } from "./auth";
 import { handleFallbackRequest } from "./fallback";
 
-const rawApiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const rawApiBase = process.env.NEXT_PUBLIC_API_URL || "";
 const API_BASE_URL = rawApiBase.trim().split(/\s+/)[0].replace(/\/$/, "");
+
+// Eğer yerel bir FastAPI sunucusu (localhost:8000) açıkça belirtilmemişse veya Render adresi uykudaysa,
+// doğrudan canlı Supabase PostgreSQL + Next.js /api/ai (Groq Cloud) motorunu çalıştır.
+const shouldUseDirectCloudEngine = (): boolean => {
+  if (!API_BASE_URL) return true;
+  if (API_BASE_URL.includes("onrender.com")) return true;
+  if (
+    typeof window !== "undefined" &&
+    window.location.hostname !== "localhost" &&
+    window.location.hostname !== "127.0.0.1" &&
+    API_BASE_URL.includes("localhost")
+  ) {
+    return true;
+  }
+  return false;
+};
 
 async function fetchWithAuth(path: string, options: RequestInit = {}) {
   const session = getStoredSession();
 
-  // Demo oturumunda mock-signature varsa doğrudan izole istemci mağazasını kullan
-  if (session && isDemoSession(session) && session.token.includes("mock-signature")) {
+  if (
+    shouldUseDirectCloudEngine() ||
+    (session && isDemoSession(session) && session.token.includes("mock-signature"))
+  ) {
     return handleFallbackRequest(path, options);
   }
 
@@ -23,7 +41,7 @@ async function fetchWithAuth(path: string, options: RequestInit = {}) {
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 4000);
+    const timer = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(`${API_BASE_URL}${path}`, {
       ...options,
       headers,
@@ -51,7 +69,6 @@ async function fetchWithAuth(path: string, options: RequestInit = {}) {
 
     return await res.json();
   } catch (err: any) {
-    // Render uyku modundaysa (timeout) veya ağ hatası varsa doğrudan Supabase / Demo yedek katmanıyla devam et
     if (
       err.name === "AbortError" ||
       err.message?.includes("Failed to fetch") ||

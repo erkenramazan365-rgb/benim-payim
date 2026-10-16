@@ -3,7 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { getStoredSession, setStoredSession, UserSession } from "@/lib/auth";
+import {
+  getStoredSession,
+  setStoredSession,
+  syncSupabaseSession,
+  supabase,
+  isLiveSupabaseConfigured,
+  UserSession,
+} from "@/lib/auth";
 
 export default function Navbar() {
   const router = useRouter();
@@ -15,15 +22,46 @@ export default function Navbar() {
     setSession(getStoredSession());
     setMounted(true);
 
-    // Oturum değişikliklerini dinle (farklı sekmeler veya login olayları için)
-    const handleStorageChange = () => {
+    // Eğer kullanıcı e-posta onay bağlantısından döndüyse Supabase oturumunu senkronize et
+    syncSupabaseSession().then((synced) => {
+      if (synced) setSession(synced);
+    });
+
+    const handleAuthChange = () => {
       setSession(getStoredSession());
     };
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
+    window.addEventListener("storage", handleAuthChange);
+    window.addEventListener("benim-payim-auth-change", handleAuthChange);
+
+    let subscription: { unsubscribe: () => void } | null = null;
+    if (isLiveSupabaseConfigured()) {
+      const { data } = supabase.auth.onAuthStateChange((_event, supaSession) => {
+        if (supaSession?.user) {
+          const updated: UserSession = {
+            user_id: supaSession.user.id,
+            email: supaSession.user.email || "",
+            token: supaSession.access_token,
+          };
+          setStoredSession(updated);
+          setSession(updated);
+        }
+      });
+      subscription = data.subscription;
+    }
+
+    return () => {
+      window.removeEventListener("storage", handleAuthChange);
+      window.removeEventListener("benim-payim-auth-change", handleAuthChange);
+      subscription?.unsubscribe();
+    };
   }, []);
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (isLiveSupabaseConfigured()) {
+      try {
+        await supabase.auth.signOut();
+      } catch {}
+    }
     setStoredSession(null);
     setSession(null);
     router.push("/login");

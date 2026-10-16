@@ -1,8 +1,13 @@
 "use client";
 
-import { useState, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { setStoredSession, isLiveSupabaseConfigured, supabase } from "@/lib/auth";
+import {
+  setStoredSession,
+  syncSupabaseSession,
+  isLiveSupabaseConfigured,
+  supabase,
+} from "@/lib/auth";
 
 function LoginForm() {
   const router = useRouter();
@@ -17,8 +22,16 @@ function LoginForm() {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  // Demo modu için pratik token üretici (Yerel geliştirme ve test için)
-  const createDemoToken = (userEmail: string) => {
+  useEffect(() => {
+    syncSupabaseSession().then((synced) => {
+      if (synced && !synced.token.includes("mock-signature")) {
+        router.push(redirectTarget);
+      }
+    });
+  }, [router, redirectTarget]);
+
+  // Hızlı misafir oturumu için yerel token üretici
+  const createGuestToken = (userEmail: string) => {
     const userId = "11111111-2222-3333-4444-555555555555";
     const header = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }));
     const now = Math.floor(Date.now() / 1000);
@@ -44,6 +57,32 @@ function LoginForm() {
     router.push(redirectTarget);
   };
 
+  const handleForgotPassword = async () => {
+    setError(null);
+    setSuccessMessage(null);
+    if (!email.trim() || !email.includes("@")) {
+      setError("Şifre sıfırlama bağlantısı göndermek için lütfen önce yukarıya e-posta adresinizi yazın.");
+      return;
+    }
+    if (!isLiveSupabaseConfigured()) {
+      setError("Misafir modunda şifre sıfırlama gerekmez; doğrudan giriş yapabilirsiniz.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const origin = typeof window !== "undefined" ? window.location.origin : "";
+      const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${origin}/login`,
+      });
+      if (resetErr) throw resetErr;
+      setSuccessMessage("Şifre sıfırlama bağlantısı e-posta adresinize gönderildi. Lütfen gelen kutunuzu kontrol edin.");
+    } catch (err: any) {
+      setError(err.message || "Şifre sıfırlama e-postası gönderilemedi.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -60,9 +99,13 @@ function LoginForm() {
 
       if (isLiveSupabaseConfigured()) {
         if (isRegister) {
+          const origin = typeof window !== "undefined" ? window.location.origin : "";
           const { data, error: signUpError } = await supabase.auth.signUp({
             email: email.trim(),
             password,
+            options: {
+              emailRedirectTo: `${origin}/sessions`,
+            },
           });
           if (signUpError) throw signUpError;
           if (data.session) {
@@ -79,33 +122,20 @@ function LoginForm() {
             email: email.trim(),
             password,
           });
-          if (signInError) throw signInError;
+          if (signInError) {
+            if (signInError.message.includes("Email not confirmed")) {
+              throw new Error("E-posta adresiniz henüz onaylanmamış. Lütfen gelen kutunuzdaki onay bağlantısına tıklayın.");
+            }
+            if (signInError.message.includes("Invalid login credentials")) {
+              throw new Error("E-posta veya şifre hatalı. Henüz kayıt olmadıysanız aşağıdan 'Kayıt Ol' seçeneğine geçin.");
+            }
+            throw signInError;
+          }
           handleSuccessfulAuth(data.user.id, data.user.email!, data.session.access_token);
           return;
         }
       } else {
-        // Yerel Demo Modu: Backend'den imzalı token al (2.5sn zaman aşımı ile)
-        const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().split(/\s+/)[0].replace(/\/$/, "");
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 2500);
-          const res = await fetch(`${rawApiUrl}/api/auth/demo-token`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email: email.trim() }),
-            signal: controller.signal,
-          });
-          clearTimeout(timer);
-          if (res.ok) {
-            const data = await res.json();
-            handleSuccessfulAuth(data.user_id, data.email, data.access_token);
-            return;
-          }
-        } catch (fetchErr) {
-          console.warn("Backend demo token alınamadı, yerel üretiliyor:", fetchErr);
-        }
-
-        const token = createDemoToken(email.trim());
+        const token = createGuestToken(email.trim());
         handleSuccessfulAuth("11111111-2222-3333-4444-555555555555", email.trim(), token);
       }
     } catch (err: any) {
@@ -119,25 +149,7 @@ function LoginForm() {
     const demoEmail = "ogrenci@benimpayim.dev";
     setLoading(true);
     setError(null);
-    const rawApiUrl = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").trim().split(/\s+/)[0].replace(/\/$/, "");
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2500);
-      const res = await fetch(`${rawApiUrl}/api/auth/demo-token`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: demoEmail }),
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        const data = await res.json();
-        handleSuccessfulAuth(data.user_id, data.email, data.access_token);
-        return;
-      }
-    } catch {}
-
-    const token = createDemoToken(demoEmail);
+    const token = createGuestToken(demoEmail);
     handleSuccessfulAuth("11111111-2222-3333-4444-555555555555", demoEmail, token);
   };
 
@@ -186,9 +198,20 @@ function LoginForm() {
         </div>
 
         <div>
-          <label className="block text-xs font-semibold text-stone-700 mb-1" htmlFor="password-input">
-            Şifre <span className="text-red-500">*</span>
-          </label>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-xs font-semibold text-stone-700" htmlFor="password-input">
+              Şifre <span className="text-red-500">*</span>
+            </label>
+            {!isRegister && (
+              <button
+                type="button"
+                onClick={handleForgotPassword}
+                className="text-[11px] font-medium text-indigo-600 hover:underline focus:outline-none"
+              >
+                Şifremi Unuttum
+              </button>
+            )}
+          </div>
           <div className="relative">
             <input
               id="password-input"
@@ -272,7 +295,7 @@ function LoginForm() {
         </div>
       </div>
 
-      {/* Demo ile Dene Butonu */}
+      {/* Hızlı Misafir Girişi Butonu */}
       <div className="space-y-1.5">
         <button
           type="button"
@@ -281,10 +304,10 @@ function LoginForm() {
           className="w-full py-2.5 px-3 border border-stone-300 rounded-lg text-xs font-semibold text-stone-700 hover:bg-stone-50 transition-colors flex items-center justify-center gap-2 focus:outline-none focus:ring-2 focus:ring-stone-400 disabled:opacity-50"
         >
           <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-          Demo ile Dene
+          Hızlı Misafir Girişi (Kayıtsız Dene)
         </button>
         <p className="text-[11px] text-stone-400 text-center">
-          Kayıt olmadan uygulamayı hemen incelemek için hazır demo oturumu açar.
+          Canlı yapay zekâ asistanını ve çalışma alanını e-posta onayı beklemeden hemen deneyimleyin.
         </p>
       </div>
     </div>

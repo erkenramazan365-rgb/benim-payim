@@ -6,13 +6,17 @@ function sanitizeEnvValue(raw: string | undefined, fallback: string): string {
   return firstToken || fallback;
 }
 
+const DEFAULT_SUPABASE_URL = "https://sfoppatbaiaycxijcrzq.supabase.co";
+const DEFAULT_SUPABASE_ANON_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNmb3BwYXRiYWlheWN4aWpjcnpxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIwODE1ODEsImV4cCI6MjEwNzY1NzU4MX0.MhW1Ossu9bp-P4p66Kq17ygQiWou729Frzm7yAcl5aQ";
+
 export const SUPABASE_URL = sanitizeEnvValue(
   process.env.NEXT_PUBLIC_SUPABASE_URL,
-  "http://localhost:54321"
+  DEFAULT_SUPABASE_URL
 );
 export const SUPABASE_ANON_KEY = sanitizeEnvValue(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  "demo-anon-key"
+  DEFAULT_SUPABASE_ANON_KEY
 );
 
 // Gerçek Supabase projesi tanımlı mı?
@@ -54,6 +58,26 @@ export const setStoredSession = (session: UserSession | null) => {
   } else {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
   }
+  window.dispatchEvent(new Event("benim-payim-auth-change"));
+};
+
+export const syncSupabaseSession = async (): Promise<UserSession | null> => {
+  if (typeof window === "undefined" || !isLiveSupabaseConfigured()) {
+    return getStoredSession();
+  }
+  try {
+    const { data } = await supabase.auth.getSession();
+    if (data?.session?.user) {
+      const synced: UserSession = {
+        user_id: data.session.user.id,
+        email: data.session.user.email || "",
+        token: data.session.access_token,
+      };
+      setStoredSession(synced);
+      return synced;
+    }
+  } catch {}
+  return getStoredSession();
 };
 
 export const isDemoSession = (session: UserSession | null): boolean => {
